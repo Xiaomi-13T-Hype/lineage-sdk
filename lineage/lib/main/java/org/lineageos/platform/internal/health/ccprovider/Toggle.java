@@ -249,6 +249,9 @@ public class Toggle extends ChargingControlProvider {
     }
 
     private boolean shouldStopCharging(float currentPct, int targetPct) {
+        if (targetPct >= 101) {
+            return false;
+        }
         if (mIsLimitSet) {
             return currentPct >= targetPct - mChargingLimitMargin;
         }

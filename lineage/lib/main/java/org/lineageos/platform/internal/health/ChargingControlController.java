@@ -21,6 +21,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.BatteryManager;
+import android.os.FileUtils;
 import android.os.Handler;
 import android.os.RemoteException;
 import android.os.ServiceManager;
@@ -35,8 +36,12 @@ import org.lineageos.platform.internal.health.ccprovider.Deadline;
 import org.lineageos.platform.internal.health.ccprovider.Limit;
 import org.lineageos.platform.internal.health.ccprovider.Toggle;
 
+import vendor.lineage.health.ChargingControlSupportedMode;
+import vendor.lineage.health.ChargingLimitInfo;
 import vendor.lineage.health.IChargingControl;
 
+import java.io.File;
+import java.io.IOException;
 import java.io.PrintWriter;
 
 public class ChargingControlController extends LineageHealthFeature {
@@ -81,12 +86,32 @@ public class ChargingControlController extends LineageHealthFeature {
         super(context, handler);
 
         mContentResolver = mContext.getContentResolver();
-        mChargingControl = IChargingControl.Stub.asInterface(
-                ServiceManager.waitForDeclaredService(
-                        IChargingControl.DESCRIPTOR + "/default"));
+        IChargingControl chargingControl = null;
+        try {
+            if (ServiceManager.isDeclared(IChargingControl.DESCRIPTOR + "/default")) {
+                chargingControl = IChargingControl.Stub.asInterface(
+                        ServiceManager.waitForDeclaredService(
+                                IChargingControl.DESCRIPTOR + "/default"));
+            } else {
+                android.os.IBinder binder = ServiceManager.checkService(
+                        IChargingControl.DESCRIPTOR + "/default");
+                if (binder != null) {
+                    chargingControl = IChargingControl.Stub.asInterface(binder);
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Failed to get Lineage Health HAL", e);
+        }
+
+        if (chargingControl == null) {
+            Log.i(TAG, "Lineage Health HAL not available, falling back to sysfs control");
+            chargingControl = createSysfsFallback();
+        }
+
+        mChargingControl = chargingControl;
 
         if (mChargingControl == null) {
-            Log.i(TAG, "Lineage Health HAL not found");
+            Log.i(TAG, "Lineage Health HAL and sysfs fallback not found");
             return;
         }
 
@@ -222,7 +247,7 @@ public class ChargingControlController extends LineageHealthFeature {
     }
 
     public boolean setLimit(int limit) {
-        if (limit < 0 || limit > 100) {
+        if (limit < 0 || limit > 101) {
             return false;
         }
 
@@ -435,7 +460,10 @@ public class ChargingControlController extends LineageHealthFeature {
         mCurrentProvider.enable();
 
         if (mode == MODE_LIMIT) {
-            if (mCurrentProvider.update(mBatteryPct, limit) && mIsPowerConnected) {
+            if (limit >= 101) {
+                mCurrentProvider.update(mBatteryPct, limit);
+                mChargingNotification.cancel();
+            } else if (mCurrentProvider.update(mBatteryPct, limit) && mIsPowerConnected) {
                 mChargingNotification.post(limit, mBatteryPct >= limit);
             } else {
                 mChargingNotification.cancel();
@@ -583,5 +611,89 @@ public class ChargingControlController extends LineageHealthFeature {
         public long getTargetTime() {
             return mTargetTime;
         }
+    }
+
+    private static IChargingControl createSysfsFallback() {
+        final String[] chargingPaths = {
+            "/sys/class/power_supply/battery/charging_enabled",
+            "/sys/class/power_supply/battery/battery_charging_enabled",
+        };
+
+        String selectedPath = null;
+        for (String path : chargingPaths) {
+            if (new File(path).exists()) {
+                selectedPath = path;
+                break;
+            }
+        }
+
+        if (selectedPath == null) {
+            Log.w(TAG, "No supported sysfs charging path found");
+            return null;
+        }
+
+        final String primaryPath = selectedPath;
+        Log.i(TAG, "Using sysfs charging control fallback with primary node: " + primaryPath);
+
+        return new IChargingControl.Stub() {
+            @Override
+            public boolean getChargingEnabled() throws RemoteException {
+                try {
+                    String content = FileUtils.readTextFile(new File(primaryPath), 0, null).trim();
+                    return !"0".equals(content);
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to read charging enabled from " + primaryPath, e);
+                    return true;
+                }
+            }
+
+            @Override
+            public void setChargingEnabled(boolean enabled) throws RemoteException {
+                final String val = enabled ? "1" : "0";
+                for (String path : chargingPaths) {
+                    if (new File(path).exists()) {
+                        try {
+                            FileUtils.stringToFile(path, val);
+                        } catch (IOException e) {
+                            Log.e(TAG, "Failed to write charging enabled to " + path, e);
+                        }
+                    }
+                }
+                Log.i(TAG, "sysfs chargingEnabled set to: " + enabled);
+            }
+
+            @Override
+            public void setChargingDeadline(long deadline) throws RemoteException {
+            }
+
+            @Override
+            public int getSupportedMode() throws RemoteException {
+                return ChargingControlSupportedMode.TOGGLE | ChargingControlSupportedMode.BYPASS;
+            }
+
+            @Override
+            public long getChargingDeadline() throws RemoteException {
+                return 0L;
+            }
+
+            @Override
+            public ChargingLimitInfo getChargingLimit() throws RemoteException {
+                return null;
+            }
+
+            @Override
+            public void setChargingLimit(ChargingLimitInfo limit) throws RemoteException {
+            }
+
+            @Override
+            public int getInterfaceVersion() {
+                return IChargingControl.VERSION;
+            }
+
+            @Override
+            public String getInterfaceHash() {
+                return IChargingControl.HASH;
+            }
+        };
     }
 }

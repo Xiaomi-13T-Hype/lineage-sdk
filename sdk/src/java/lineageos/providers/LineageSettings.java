@@ -1453,7 +1453,7 @@ public final class LineageSettings {
 
         /** @hide */
         public static final Validator CHARGING_CONTROL_LIMIT_VALIDATOR =
-                new InclusiveIntegerRangeValidator(70, 100);
+                new InclusiveIntegerRangeValidator(70, 101);
 
         /**
          * Fast charging mode

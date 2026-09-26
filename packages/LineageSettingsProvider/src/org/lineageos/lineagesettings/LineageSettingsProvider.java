@@ -744,6 +744,15 @@ public class LineageSettingsProvider extends ContentProvider {
             throw new IllegalArgumentException("Invalid setting: " + name);
         }
 
+        if (LineageSettings.System.CHARGING_CONTROL_LIMIT.equals(name)) {
+            try {
+                int val = Integer.parseInt(value);
+                if (val >= 70 && val <= 101) {
+                    return;
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+
         if (!validator.validate(value)) {
             throw new IllegalArgumentException("Invalid value: " + value
                     + " for setting: " + name);
