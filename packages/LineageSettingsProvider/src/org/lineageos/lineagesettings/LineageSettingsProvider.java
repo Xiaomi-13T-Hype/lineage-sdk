@@ -747,7 +747,7 @@ public class LineageSettingsProvider extends ContentProvider {
         if (LineageSettings.System.CHARGING_CONTROL_LIMIT.equals(name)) {
             try {
                 int val = Integer.parseInt(value);
-                if (val >= 70 && val <= 101) {
+                if (val >= 80 && val <= 101) {
                     return;
                 }
             } catch (NumberFormatException ignored) {}
